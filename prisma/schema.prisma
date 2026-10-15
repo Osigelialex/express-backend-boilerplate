@@ -1,0 +1,37 @@
+// Prisma schema. After editing run `pnpm migrate:dev --name <what_changed>`
+// to create a migration (commit the generated folder) and regenerate the client.
+//
+// Production applies committed migrations with `pnpm migrate`
+// (prisma migrate deploy); never use `migrate dev` against a real database.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  user
+  admin
+}
+
+model User {
+  id            String    @id @default(uuid())
+  name          String    @db.VarChar(99)
+  // Always stored lower-cased and trimmed (see utils/email.ts).
+  email         String    @unique @db.VarChar(99)
+  // bcrypt hash, never returned by the API (see utils/userMapper.ts).
+  password      String    @db.VarChar(100)
+  // Set when the user proves ownership of the email; null = unverified.
+  emailVerified DateTime?
+  role          Role      @default(user)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Pagination sorts by createdAt, so keep it indexed.
+  @@index([createdAt])
+  @@map("users")
+}

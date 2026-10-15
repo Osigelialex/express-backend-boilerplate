@@ -1,0 +1,100 @@
+# PRODUCTION stack: API + workers + Postgres + Redis.
+#
+# Runs a prebuilt image (built and pushed by .github/workflows/deploy.yml):
+#   DOCKER_IMAGE=ghcr.io/<owner>/<repo>:latest docker compose up -d
+#
+# Configuration comes from `.env` next to this file (see .env.example).
+# DATABASE_URL / REDIS_URL are overridden below to point at the compose
+# services, so the values in .env are only used outside Docker.
+
+# Settings shared by the API and every worker (YAML anchor).
+x-app: &app
+  image: ${DOCKER_IMAGE:?Set DOCKER_IMAGE, e.g. ghcr.io/owner/repo:latest}
+  env_file: .env
+  environment: &app-env
+    NODE_ENV: production
+    # URL-encode special characters in POSTGRES_PASSWORD (@ -> %40, ...).
+    DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-app}?schema=public
+    REDIS_URL: redis://redis:6379
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+  networks: [app-network]
+  # Hardening: no privilege escalation, no Linux capabilities, tmp in memory.
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+  tmpfs: [/tmp]
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  api:
+    <<: *app
+    # Binds to localhost only: put nginx/Caddy/a load balancer in front.
+    ports:
+      - "127.0.0.1:${PORT:-4000}:${PORT:-4000}"
+    # Logs go to stdout (`docker compose logs -f api`). If you enable
+    # LOG_TO_FILE, mount a volume owned by uid 1000 (the image's `node` user).
+
+  email-worker:
+    <<: *app
+    command: ["node", "dist/src/workers/email.worker.js"]
+    healthcheck:
+      disable: true
+
+  maintenance-worker:
+    <<: *app
+    command: ["node", "dist/src/workers/maintenance.worker.js"]
+    healthcheck:
+      disable: true
+
+  # To add another worker, copy a block above and change the command, e.g.:
+  # payment-worker:
+  #   <<: *app
+  #   command: ["node", "dist/src/workers/payment.worker.js"]
+  #   healthcheck:
+  #     disable: true
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-app}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks: [app-network]
+
+  redis:
+    image: redis:7-alpine
+    # AOF persistence: refresh-token denylist and queued jobs survive restarts.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks: [app-network]
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  app-network:
+    driver: bridge

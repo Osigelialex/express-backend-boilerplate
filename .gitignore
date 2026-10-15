@@ -1,0 +1,11 @@
+node_modules
+dist
+coverage
+logs
+*.log
+
+# Secrets: only the *.example / .env.test templates are committed
+.env
+.env.*
+!.env.example
+!.env.test

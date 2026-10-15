@@ -1,0 +1,9 @@
+{
+  // Production build: everything in tsconfig.json except the test suite.
+  // Output lands in dist/src/** and dist/scripts/** (rootDir is the repo root).
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "sourceMap": false
+  },
+  "exclude": ["node_modules", "dist", "src/__tests__", "scripts/dev.seed.ts"]
+}

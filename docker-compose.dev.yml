@@ -1,0 +1,116 @@
+# DEVELOPMENT stack with hot reload:  pnpm docker:dev   (or `pnpm docker:dev:build`)
+#
+#   API          http://localhost:4000      (nodemon restarts on src changes)
+#   Postgres     localhost:5432             user/password/db: postgres/postgres/app
+#   Redis        localhost:6379
+#   Mailpit UI   http://localhost:8025      (catches every email the app sends)
+#
+# Copy .env.example to .env first. DATABASE_URL, REDIS_URL and SMTP_* are
+# overridden here to point at the compose services.
+
+x-dev-app: &dev-app
+  build:
+    context: .
+    target: dev
+  env_file: .env
+  environment: &dev-env
+    NODE_ENV: development
+    DATABASE_URL: postgresql://postgres:postgres@db:5432/app?schema=public
+    REDIS_URL: redis://redis:6379
+    SMTP_HOST: mailpit
+    SMTP_PORT: "1025"
+    SMTP_SECURE: "false"
+    CHOKIDAR_USEPOLLING: "true"
+  volumes:
+    # Source is bind-mounted for hot reload; node_modules lives in a named
+    # volume so the host's (possibly Windows/macOS) modules never leak in.
+    - .:/app
+    - node_modules:/app/node_modules
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  networks: [app-network]
+
+services:
+  api:
+    <<: *dev-app
+    ports:
+      - "${PORT:-4000}:${PORT:-4000}"
+    command: >
+      sh -c "pnpm exec prisma generate &&
+             pnpm exec prisma migrate deploy &&
+             pnpm seed:dev &&
+             pnpm dev"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:$${PORT:-4000}/health >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  email-worker:
+    <<: *dev-app
+    command: pnpm worker:email:dev
+    depends_on:
+      api:
+        condition: service_healthy # the API applies migrations first
+      redis:
+        condition: service_healthy
+
+  maintenance-worker:
+    <<: *dev-app
+    command: pnpm worker:maintenance:dev
+    depends_on:
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: app
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d app"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [app-network]
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [app-network]
+
+  # Local SMTP sink with a web inbox - no real email is ever sent in dev.
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "8025:8025" # web UI
+      - "1025:1025" # SMTP
+    networks: [app-network]
+
+volumes:
+  postgres_data:
+  redis_data:
+  node_modules:
+
+networks:
+  app-network:
+    driver: bridge
