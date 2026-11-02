@@ -82,7 +82,7 @@ jobs:
 
       - name: Pull and restart
         if: env.HAS_DEPLOY_TARGET == 'true'
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         env:
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
           DOCKER_IMAGE: ${{ needs.image.outputs.image }}:latest
